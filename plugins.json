@@ -1,0 +1,48 @@
+[
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=katworld.net&sz=%size%",
+        "fileHash": "sha256-6459addfea0852bafc0dc8c1a3280734291084dcf73be5871a8811342b95f8b8",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Deathscythe0x1/Extenstions-Cloudstream",
+        "fileSize": 24003,
+        "status": 1,
+        "language": "hi",
+        "authors": [
+            "Deathscythe0x1"
+        ],
+        "tvTypes": [
+            "Anime",
+            "TvSeries",
+            "Movie",
+            "AsianDrama"
+        ],
+        "version": 8,
+        "internalName": "KatWorld",
+        "description": "KatWorld All-in-One (PikaHD, KatmovieHD, MoviesBaba, KatDrama, Katmovie4K)",
+        "url": "https://raw.githubusercontent.com/Deathscythe0x1/Extenstions-Cloudstream/builds/KatWorld.cs3",
+        "name": "KatWorld"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=youtube.com&sz=128",
+        "fileHash": "sha256-ca18728922c850fe01ab5dff97cb51b778be9cc74399e48a82a79ab683ef5a65",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Deathscythe0x1/Extenstions-Cloudstream",
+        "fileSize": 15854,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Deathscyhthe0x1"
+        ],
+        "tvTypes": [
+            "Movies",
+            "Anime",
+            "TV Series",
+            "Drama"
+        ],
+        "version": 7,
+        "internalName": "YoutubeProvider",
+        "description": "Youtube Extension without ads and with support for 4k videos playback.",
+        "url": "https://raw.githubusercontent.com/Deathscythe0x1/Extenstions-Cloudstream/builds/YoutubeProvider.cs3",
+        "name": "YoutubeProvider"
+    }
+]
