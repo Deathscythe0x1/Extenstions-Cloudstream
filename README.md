@@ -7,7 +7,7 @@ A small [CloudStream](https://github.com/recloudstream/cloudstream) plugin repos
 | Plugin | Description |
 |---|---|
 | **YouTube** | Search YouTube videos and play them in CloudStream. |
-| **Katworld** | Search YouTube videos and play them in CloudStream. |
+| **Katworld** | Search videos and play them in CloudStream it include the katmoviehd pikahd moviebaba and many more. |
 
 ## Install
 
