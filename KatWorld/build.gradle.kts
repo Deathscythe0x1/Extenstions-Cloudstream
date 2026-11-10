@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 cloudstream {
     language = "hi"
@@ -14,8 +14,4 @@ cloudstream {
     )
 
     iconUrl = "https://www.google.com/s2/favicons?domain=katworld.net&sz=%size%"
-}
-
-dependencies {
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
 }
