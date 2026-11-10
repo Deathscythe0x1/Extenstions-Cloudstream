@@ -2,6 +2,7 @@ package com.katworld
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 abstract class KatWorldBaseProvider(
@@ -18,9 +19,12 @@ abstract class KatWorldBaseProvider(
         "" to "Latest Releases"
     )
 
-    // Dynamically resolves the latest domain from katworld.net before making requests
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
     private suspend fun activeUrl(): String {
-        mainUrl = KatWorldPortal.getDomain(siteKey)
+        mainUrl = KatWorldPortal.getDomain(siteKey).removeSuffix("/")
         return mainUrl
     }
 
@@ -32,72 +36,126 @@ abstract class KatWorldBaseProvider(
         val path = if (request.data.isEmpty()) "" else "${request.data.trim('/')}/"
         val url = if (page == 1) "$base/$path" else "$base/${path}page/$page/"
 
-        val document = app.get(url).document
-        val items = document.select("article, div.post-item, ul.recent-posts li").mapNotNull {
-            it.toSearchResult()
+        val response = app.get(url, headers = headers)
+        val document = response.document
+        val items = parsePosts(document, base).toMutableList()
+
+        // Diagnostic card: If 0 items are parsed on page 1, display the HTTP status & URL so you can see why
+        if (items.isEmpty() && page == 1) {
+            items.add(
+                newMovieSearchResponse(
+                    "[Debug] HTTP ${response.code} | Links: ${document.select("a").size} | $base",
+                    url,
+                    defaultTvType
+                )
+            )
         }
 
         return newHomePageResponse(request.name, items)
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2.entry-title a, h3.entry-title a, h2 a, .post-title a")
-            ?: return null
-        val rawTitle = titleElement.text().trim()
-        val href = fixUrl(titleElement.attr("href"))
+    private fun parsePosts(document: Document, base: String): List<SearchResponse> {
+        // 1. Try standard WordPress post containers first
+        val cards = document.select(
+            "article, .post, .post-item, .blog-post, .result-item, ul.recent-posts li, .grid-item, .movie-item, .item"
+        )
+        val fromCards = cards.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        if (fromCards.isNotEmpty()) return fromCards
 
-        val cleanTitle = rawTitle
+        // 2. Fallback: Group all internal post links by href (handles themes where image <a> and text <a> are siblings)
+        val ignoredPaths = listOf("/page/", "/category/", "/tag/", "/wp-", "/author/", "?s=", "#")
+        val groupedLinks = document.select("a[href]")
+            .mapNotNull { a ->
+                val href = fixUrl(a.attr("href")).removeSuffix("/")
+                if (!href.startsWith(base) || href == base.removeSuffix("/")) return@mapNotNull null
+                if (ignoredPaths.any { href.contains(it, ignoreCase = true) }) return@mapNotNull null
+                href to a
+            }
+            .groupBy({ it.first }, { it.second })
+
+        return groupedLinks.mapNotNull { (href, aTags) ->
+            val rawTitle = aTags.map { it.text().trim() }
+                .firstOrNull { it.length > 8 }
+                ?: aTags.firstNotNullOfOrNull { it.attr("title").trim().takeIf { t -> t.length > 8 } }
+                ?: return@mapNotNull null
+
+            val cleanTitle = cleanPostTitle(rawTitle)
+            val posterUrl = aTags.firstNotNullOfOrNull { a ->
+                a.selectFirst("img")?.extractImgSrc()
+                    ?: a.parent()?.selectFirst("img")?.extractImgSrc()
+            }
+
+            newMovieSearchResponse(cleanTitle, href, defaultTvType) {
+                this.posterUrl = posterUrl
+                this.quality = getQualityFromString(rawTitle)
+            }
+        }
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val titleElement = this.selectFirst(
+            "h1 a, h2 a, h3 a, h4 a, .entry-title a, .post-title a, .title a, a[title]"
+        ) ?: this.select("a[href]").firstOrNull { it.text().trim().length > 8 }
+        ?: return null
+
+        val rawTitle = titleElement.text().trim().ifEmpty { titleElement.attr("title").trim() }
+        if (rawTitle.isEmpty()) return null
+
+        val href = fixUrl(titleElement.attr("href"))
+        val cleanTitle = cleanPostTitle(rawTitle)
+        val posterUrl = this.selectFirst("img")?.extractImgSrc()
+
+        return newMovieSearchResponse(cleanTitle, href, defaultTvType) {
+            this.posterUrl = posterUrl
+            this.quality = getQualityFromString(rawTitle)
+        }
+    }
+
+    private fun Element.extractImgSrc(): String? {
+        val src = this.attr("data-src")
+            .ifEmpty { this.attr("data-lazy-src") }
+            .ifEmpty { this.attr("data-original") }
+            .ifEmpty { this.attr("src") }
+        return fixUrlNull(src)
+    }
+
+    private fun cleanPostTitle(rawTitle: String): String {
+        return rawTitle
             .substringBefore("[")
             .substringBefore("WEB-DL")
             .substringBefore("BluRay")
             .substringBefore("1080p")
+            .substringBefore("720p")
             .trim()
-
-        val posterUrl = this.selectFirst("img")?.let { img ->
-            val src = img.attr("data-src").ifEmpty {
-                img.attr("data-lazy-src").ifEmpty { img.attr("src") }
-            }
-            fixUrlNull(src)
-        }
-
-        val quality = getQualityFromString(rawTitle)
-
-        return newMovieSearchResponse(cleanTitle, href, defaultTvType) {
-            this.posterUrl = posterUrl
-            this.quality = quality
-        }
+            .ifEmpty { rawTitle }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val base = activeUrl()
-        val document = app.get("$base/?s=$query").document
-        return document.select("article, div.post-item, div.result-item").mapNotNull {
-            it.toSearchResult()
-        }
+        val document = app.get("$base/?s=$query", headers = headers).document
+        return parsePosts(document, base)
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
-        val rawTitle = document.selectFirst("h1.entry-title, h1.post-title, h1")?.text()?.trim()
-            ?: return null
-        val title = rawTitle.substringBefore("[").trim()
+        val document = app.get(url, headers = headers).document
+        val rawTitle = document.selectFirst("h1.entry-title, h1.post-title, h1, h2.entry-title")?.text()?.trim()
+            ?: document.title()
+        val title = cleanPostTitle(rawTitle)
 
-        val poster = document.selectFirst("div.entry-content img, .post-thumbnail img")?.let { img ->
-            val src = img.attr("data-src").ifEmpty { img.attr("src") }
-            fixUrlNull(src)
-        }
+        val poster = document.selectFirst("div.entry-content img, .post-thumbnail img, article img")
+            ?.extractImgSrc()
 
-        val description = document.select("div.entry-content p")
+        val description = document.select("div.entry-content p, .post-content p")
             .firstOrNull { it.text().length > 60 }?.text()?.trim()
 
-        val content = document.selectFirst("div.entry-content, div.post-content")
+        val content = document.selectFirst("div.entry-content, div.post-content, article")
         val episodesMap = mutableMapOf<Int, MutableList<String>>()
         val directLinks = mutableListOf<String>()
 
         val epRegex = Regex("""(?:Episode|Ep|E)\s*(\d+)""", RegexOption.IGNORE_CASE)
 
         content?.select("a[href]")?.forEach { aTag ->
-            val link = aTag.attr("href")
+            val link = aTag.attr("href").trim()
             if (link.isBlank() || link.startsWith("#") || link.contains(mainUrl)) return@forEach
 
             val contextText = "${aTag.parent()?.previousElementSibling()?.text() ?: ""} ${aTag.parent()?.text() ?: ""} ${aTag.text()}"
@@ -137,14 +195,13 @@ abstract class KatWorldBaseProvider(
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val links = data.split("|").filter { it.isNotBlank() }
-        links.amap { link ->
+        for (link in links) {
             loadExtractor(link, mainUrl, subtitleCallback, callback)
         }
         return true
     }
 }
 
-// 1. KatmovieHD (Hollywood Movies & Series Dubbed)
 class KatMovieHDProvider : KatWorldBaseProvider(
     siteKey = "KatmovieHD",
     name = "KatmovieHD",
@@ -154,7 +211,6 @@ class KatMovieHDProvider : KatWorldBaseProvider(
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 }
 
-// 2. MoviesBaba (Indian Movies & Series)
 class MoviesBabaProvider : KatWorldBaseProvider(
     siteKey = "MoviesBaba",
     name = "MoviesBaba",
@@ -164,7 +220,6 @@ class MoviesBabaProvider : KatWorldBaseProvider(
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 }
 
-// 3. PikaHD (Anime Movie & Series Dubbed)
 class PikaHDProvider : KatWorldBaseProvider(
     siteKey = "PikaHD",
     name = "PikaHD",
@@ -174,7 +229,6 @@ class PikaHDProvider : KatWorldBaseProvider(
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
 }
 
-// 4. KatDrama (Asian Drama Show Dubbed)
 class KatDramaProvider : KatWorldBaseProvider(
     siteKey = "KatDrama",
     name = "KatDrama",
@@ -184,7 +238,6 @@ class KatDramaProvider : KatWorldBaseProvider(
     override val supportedTypes = setOf(TvType.AsianDrama)
 }
 
-// 5. Katmovie4K (HDR/DV 4K UHD Content)
 class KatMovie4KProvider : KatWorldBaseProvider(
     siteKey = "Katmovie4K",
     name = "Katmovie4K",
@@ -192,14 +245,4 @@ class KatMovie4KProvider : KatWorldBaseProvider(
     defaultTvType = TvType.Movie
 ) {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-}
-
-// 6. Katmovie18 (Optional - Adult 18+)
-class KatMovie18Provider : KatWorldBaseProvider(
-    siteKey = "Katmovie18",
-    name = "Katmovie18",
-    mainUrl = "https://katmovie18.com",
-    defaultTvType = TvType.NSFW
-) {
-    override val supportedTypes = setOf(TvType.NSFW)
 }
