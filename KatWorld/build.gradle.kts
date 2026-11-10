@@ -15,3 +15,7 @@ cloudstream {
 
     iconUrl = "https://www.google.com/s2/favicons?domain=katworld.net&sz=%size%"
 }
+
+dependencies {
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+}
