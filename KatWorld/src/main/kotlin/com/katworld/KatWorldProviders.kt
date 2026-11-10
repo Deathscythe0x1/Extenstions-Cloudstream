@@ -29,6 +29,14 @@ abstract class KatWorldBaseProvider(
         return mainUrl
     }
 
+    private fun resolveUrl(url: String, base: String): String {
+        return try {
+            URI(base).resolve(url).toString()
+        } catch (_: Exception) {
+            url
+        }
+    }
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -38,7 +46,6 @@ abstract class KatWorldBaseProvider(
         val url = if (page == 1) "$base/$path" else "$base/${path}page/$page/"
 
         val response = app.get(url, headers = headers)
-        // Update mainUrl to the final redirected domain if the site redirected
         val finalBase = runCatching {
             val uri = URI(response.url)
             "${uri.scheme}://${uri.host}"
@@ -65,14 +72,12 @@ abstract class KatWorldBaseProvider(
     }
 
     private fun parsePosts(document: Document, base: String): List<SearchResponse> {
-        // 1. Standard WordPress post containers
         val cards = document.select(
             "article, .post, .post-item, .blog-post, .result-item, ul.recent-posts li, .grid-item, .movie-item, .item"
         )
         val fromCards = cards.mapNotNull { it.toSearchResult(base) }.distinctBy { it.url }
         if (fromCards.isNotEmpty()) return fromCards
 
-        // 2. Fallback: Group all post links by href
         val ignoredPaths = listOf(
             "/page/", "/category/", "/tag/", "/wp-", "/author/", "?s=", "#",
             "telegram", "instagram", "facebook", "twitter", "how-to-download", "dmca", "contact"
@@ -81,7 +86,7 @@ abstract class KatWorldBaseProvider(
             .mapNotNull { a ->
                 val rawHref = a.attr("href").trim()
                 if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.startsWith("javascript")) return@mapNotNull null
-                val href = fixUrl(rawHref, base).removeSuffix("/")
+                val href = resolveUrl(rawHref, base).removeSuffix("/")
                 if (href == base.removeSuffix("/") || href.contains("katworld.net")) return@mapNotNull null
                 if (ignoredPaths.any { href.contains(it, ignoreCase = true) }) return@mapNotNull null
                 href to a
@@ -117,7 +122,7 @@ abstract class KatWorldBaseProvider(
         val rawTitle = titleElement.text().trim().ifEmpty { titleElement.attr("title").trim() }
         if (rawTitle.length < 4) return null
 
-        val href = fixUrl(titleElement.attr("href"), base)
+        val href = resolveUrl(titleElement.attr("href"), base)
         if (href.contains("katworld.net")) return null
 
         val cleanTitle = cleanPostTitle(rawTitle)
@@ -136,7 +141,7 @@ abstract class KatWorldBaseProvider(
             .ifEmpty { this.attr("src") }
             .trim()
         if (src.isEmpty() || src.startsWith("data:")) return null
-        return fixUrl(src, base)
+        return resolveUrl(src, base)
     }
 
     private fun cleanPostTitle(rawTitle: String): String {
