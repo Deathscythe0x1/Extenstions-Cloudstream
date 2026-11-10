@@ -17,5 +17,5 @@ cloudstream {
 }
 
 dependencies {
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
 }
