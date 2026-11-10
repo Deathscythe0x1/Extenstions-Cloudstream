@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URI
 
 abstract class KatWorldBaseProvider(
     private val siteKey: String,
@@ -37,14 +38,23 @@ abstract class KatWorldBaseProvider(
         val url = if (page == 1) "$base/$path" else "$base/${path}page/$page/"
 
         val response = app.get(url, headers = headers)
-        val document = response.document
-        val items = parsePosts(document, base).toMutableList()
+        // Update mainUrl to the final redirected domain if the site redirected
+        val finalBase = runCatching {
+            val uri = URI(response.url)
+            "${uri.scheme}://${uri.host}"
+        }.getOrDefault(base)
+        mainUrl = finalBase
 
-        // Diagnostic card: If 0 items are parsed on page 1, display the HTTP status & URL so you can see why
+        val document = response.document
+        val items = parsePosts(document, finalBase).toMutableList()
+
         if (items.isEmpty() && page == 1) {
+            val sampleLinks = document.select("a[href]").take(3).joinToString(" | ") {
+                "${it.text().take(15)}->${it.attr("href").take(25)}"
+            }
             items.add(
                 newMovieSearchResponse(
-                    "[Debug] HTTP ${response.code} | Links: ${document.select("a").size} | $base",
+                    "[Debug] ${response.code} | Links:${document.select("a").size} | URL:${response.url} | $sampleLinks",
                     url,
                     defaultTvType
                 )
@@ -55,19 +65,24 @@ abstract class KatWorldBaseProvider(
     }
 
     private fun parsePosts(document: Document, base: String): List<SearchResponse> {
-        // 1. Try standard WordPress post containers first
+        // 1. Standard WordPress post containers
         val cards = document.select(
             "article, .post, .post-item, .blog-post, .result-item, ul.recent-posts li, .grid-item, .movie-item, .item"
         )
-        val fromCards = cards.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val fromCards = cards.mapNotNull { it.toSearchResult(base) }.distinctBy { it.url }
         if (fromCards.isNotEmpty()) return fromCards
 
-        // 2. Fallback: Group all internal post links by href (handles themes where image <a> and text <a> are siblings)
-        val ignoredPaths = listOf("/page/", "/category/", "/tag/", "/wp-", "/author/", "?s=", "#")
+        // 2. Fallback: Group all post links by href
+        val ignoredPaths = listOf(
+            "/page/", "/category/", "/tag/", "/wp-", "/author/", "?s=", "#",
+            "telegram", "instagram", "facebook", "twitter", "how-to-download", "dmca", "contact"
+        )
         val groupedLinks = document.select("a[href]")
             .mapNotNull { a ->
-                val href = fixUrl(a.attr("href")).removeSuffix("/")
-                if (!href.startsWith(base) || href == base.removeSuffix("/")) return@mapNotNull null
+                val rawHref = a.attr("href").trim()
+                if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.startsWith("javascript")) return@mapNotNull null
+                val href = fixUrl(rawHref, base).removeSuffix("/")
+                if (href == base.removeSuffix("/") || href.contains("katworld.net")) return@mapNotNull null
                 if (ignoredPaths.any { href.contains(it, ignoreCase = true) }) return@mapNotNull null
                 href to a
             }
@@ -81,8 +96,9 @@ abstract class KatWorldBaseProvider(
 
             val cleanTitle = cleanPostTitle(rawTitle)
             val posterUrl = aTags.firstNotNullOfOrNull { a ->
-                a.selectFirst("img")?.extractImgSrc()
-                    ?: a.parent()?.selectFirst("img")?.extractImgSrc()
+                a.selectFirst("img")?.extractImgSrc(base)
+                    ?: a.parent()?.selectFirst("img")?.extractImgSrc(base)
+                    ?: a.parent()?.parent()?.selectFirst("img")?.extractImgSrc(base)
             }
 
             newMovieSearchResponse(cleanTitle, href, defaultTvType) {
@@ -92,18 +108,20 @@ abstract class KatWorldBaseProvider(
         }
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun Element.toSearchResult(base: String): SearchResponse? {
         val titleElement = this.selectFirst(
             "h1 a, h2 a, h3 a, h4 a, .entry-title a, .post-title a, .title a, a[title]"
         ) ?: this.select("a[href]").firstOrNull { it.text().trim().length > 8 }
         ?: return null
 
         val rawTitle = titleElement.text().trim().ifEmpty { titleElement.attr("title").trim() }
-        if (rawTitle.isEmpty()) return null
+        if (rawTitle.length < 4) return null
 
-        val href = fixUrl(titleElement.attr("href"))
+        val href = fixUrl(titleElement.attr("href"), base)
+        if (href.contains("katworld.net")) return null
+
         val cleanTitle = cleanPostTitle(rawTitle)
-        val posterUrl = this.selectFirst("img")?.extractImgSrc()
+        val posterUrl = this.selectFirst("img")?.extractImgSrc(base)
 
         return newMovieSearchResponse(cleanTitle, href, defaultTvType) {
             this.posterUrl = posterUrl
@@ -111,12 +129,14 @@ abstract class KatWorldBaseProvider(
         }
     }
 
-    private fun Element.extractImgSrc(): String? {
+    private fun Element.extractImgSrc(base: String): String? {
         val src = this.attr("data-src")
             .ifEmpty { this.attr("data-lazy-src") }
             .ifEmpty { this.attr("data-original") }
             .ifEmpty { this.attr("src") }
-        return fixUrlNull(src)
+            .trim()
+        if (src.isEmpty() || src.startsWith("data:")) return null
+        return fixUrl(src, base)
     }
 
     private fun cleanPostTitle(rawTitle: String): String {
@@ -132,18 +152,19 @@ abstract class KatWorldBaseProvider(
 
     override suspend fun search(query: String): List<SearchResponse> {
         val base = activeUrl()
-        val document = app.get("$base/?s=$query", headers = headers).document
-        return parsePosts(document, base)
+        val response = app.get("$base/?s=$query", headers = headers)
+        return parsePosts(response.document, base)
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers).document
+        val response = app.get(url, headers = headers)
+        val document = response.document
         val rawTitle = document.selectFirst("h1.entry-title, h1.post-title, h1, h2.entry-title")?.text()?.trim()
             ?: document.title()
         val title = cleanPostTitle(rawTitle)
 
         val poster = document.selectFirst("div.entry-content img, .post-thumbnail img, article img")
-            ?.extractImgSrc()
+            ?.extractImgSrc(mainUrl)
 
         val description = document.select("div.entry-content p, .post-content p")
             .firstOrNull { it.text().length > 60 }?.text()?.trim()
