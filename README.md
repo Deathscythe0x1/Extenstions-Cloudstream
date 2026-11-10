@@ -7,6 +7,7 @@ A small [CloudStream](https://github.com/recloudstream/cloudstream) plugin repos
 | Plugin | Description |
 |---|---|
 | **YouTube** | Search YouTube videos and play them in CloudStream. |
+| **Katworld** | Search YouTube videos and play them in CloudStream. |
 
 ## Install
 
@@ -17,8 +18,8 @@ A small [CloudStream](https://github.com/recloudstream/cloudstream) plugin repos
 https://raw.githubusercontent.com/Deathscythe0x1/Extenstions-test/master/repo.json
 ```
 
-3. Open the repository and download **YouTube**.
-4. Close CloudStream completely and reopen it. Then use the **Search** tab and select YouTube as a source.
+3. Open the repository and download **Download the Extenstion you want**
+4. Close CloudStream completely and reopen it. Then use the **Search** tab and select Extenstion as a source.
 
 **One-tap install on Android:** open <https://deathscythe0x1.github.io/Extenstions-test/> and tap **Add to CloudStream**.
 
