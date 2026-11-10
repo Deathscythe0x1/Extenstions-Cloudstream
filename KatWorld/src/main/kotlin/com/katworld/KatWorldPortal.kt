@@ -1,7 +1,7 @@
 package com.katworld
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.fixUrl
+import java.net.URI
 
 object KatWorldPortal {
     private const val PORTAL_URL = "https://katworld.net"
@@ -23,7 +23,6 @@ object KatWorldPortal {
     )
 
     suspend fun getDomain(siteKey: String): String {
-        // PikaHD's direct domain is already known and stable
         if (siteKey == "PikaHD") return "https://new.pikahd.co"
 
         if (cachedLinks.isEmpty()) {
@@ -35,7 +34,12 @@ object KatWorldPortal {
                     val text = "${a.text()} ${a.attr("title")} ${a.parent()?.text() ?: ""}".trim()
                     val rawHref = a.attr("href").trim()
                     if (rawHref.isNotEmpty() && !rawHref.startsWith("#") && !rawHref.startsWith("javascript")) {
-                        val href = fixUrl(rawHref, PORTAL_URL).removeSuffix("/")
+                        val href = try {
+                            URI(PORTAL_URL).resolve(rawHref).toString().removeSuffix("/")
+                        } catch (_: Exception) {
+                            rawHref.removeSuffix("/")
+                        }
+
                         if (!href.contains("katworld.net", ignoreCase = true)) {
                             when {
                                 text.contains("KatmovieHD", ignoreCase = true) -> map["KatmovieHD"] = href
