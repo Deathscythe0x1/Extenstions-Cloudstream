@@ -1,10 +1,14 @@
 package com.katworld
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 abstract class KatWorldBaseProvider(
     private val siteKey: String,
@@ -20,9 +24,7 @@ abstract class KatWorldBaseProvider(
         "" to "Latest Releases"
     )
 
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
+    private val cfKiller by lazy { CloudflareKiller() }
 
     private suspend fun activeUrl(): String {
         mainUrl = KatWorldPortal.getDomain(siteKey).removeSuffix("/")
@@ -31,10 +33,43 @@ abstract class KatWorldBaseProvider(
 
     private fun resolveUrl(url: String, base: String): String {
         return try {
-            URI(base).resolve(url).toString()
+            URI(base).resolve(url.trim()).toString()
         } catch (_: Exception) {
-            url
+            url.trim()
         }
+    }
+
+    // Automatically follows JS window.location or Meta Refresh if Links <= 3
+    private suspend fun fetchDocumentWithBypass(targetUrl: String): Pair<String, Document> {
+        var resp = app.get(targetUrl, headers = KatWorldPortal.headers, allowRedirects = true)
+        var doc = resp.document
+
+        // If Cloudflare 403/503 or JS challenge detected, retry with CloudflareKiller
+        if (resp.code in listOf(403, 503) || doc.title().contains("Just a moment", ignoreCase = true)) {
+            resp = app.get(targetUrl, headers = KatWorldPortal.headers, interceptor = cfKiller, allowRedirects = true)
+            doc = resp.document
+        }
+
+        // If page has <= 3 links, check if it's a JS/Meta redirect wrapper or ISP http:// block
+        if (doc.select("a[href]").size <= 3) {
+            val html = resp.text
+            // Look for meta refresh or location.href = "..."
+            val redirectRegex = Regex(
+                """(?:url=|location(?:\.href)?\s*=\s*|window\.location\.replace\()['"\s]*(https?://[^'";\s>)]+)""",
+                RegexOption.IGNORE_CASE
+            )
+            val nextUrl = redirectRegex.find(html)?.groupValues?.getOrNull(1)
+                ?: doc.selectFirst("a[href^=http]")?.attr("href")
+
+            if (!nextUrl.isNullOrBlank() && !nextUrl.equals(targetUrl, ignoreCase = true)) {
+                val secondResp = app.get(nextUrl, headers = KatWorldPortal.headers, allowRedirects = true)
+                if (secondResp.document.select("a[href]").size > doc.select("a[href]").size) {
+                    return secondResp.url to secondResp.document
+                }
+            }
+        }
+
+        return resp.url to doc
     }
 
     override suspend fun getMainPage(
@@ -45,24 +80,22 @@ abstract class KatWorldBaseProvider(
         val path = if (request.data.isEmpty()) "" else "${request.data.trim('/')}/"
         val url = if (page == 1) "$base/$path" else "$base/${path}page/$page/"
 
-        val response = app.get(url, headers = headers)
+        val (finalUrl, document) = fetchDocumentWithBypass(url)
         val finalBase = runCatching {
-            val uri = URI(response.url)
-            "${uri.scheme}://${uri.host}"
+            val uri = URI(finalUrl)
+            "https://${uri.host}"
         }.getOrDefault(base)
         mainUrl = finalBase
 
-        val document = response.document
         val items = parsePosts(document, finalBase).toMutableList()
 
         if (items.isEmpty() && page == 1) {
-            val sampleLinks = document.select("a[href]").take(3).joinToString(" | ") {
-                "${it.text().take(15)}->${it.attr("href").take(25)}"
-            }
+            val debugInfo = "Requested: $url\nFinal URL: $finalUrl\nTitle: ${document.title()}\nLinks count: ${document.select("a").size}\n\nHTML Snippet:\n${document.body().text().take(500)}"
+            val encodedDebug = URLEncoder.encode(debugInfo, "UTF-8")
             items.add(
                 newMovieSearchResponse(
-                    "[Debug] ${response.code} | Links:${document.select("a").size} | URL:${response.url} | $sampleLinks",
-                    url,
+                    "[Debug Tap Me] Links:${document.select("a").size} | ${finalUrl.removePrefix("https://").removePrefix("http://")}",
+                    "$mainUrl/?debug_info=$encodedDebug",
                     defaultTvType
                 )
             )
@@ -157,13 +190,20 @@ abstract class KatWorldBaseProvider(
 
     override suspend fun search(query: String): List<SearchResponse> {
         val base = activeUrl()
-        val response = app.get("$base/?s=$query", headers = headers)
-        return parsePosts(response.document, base)
+        val (_, doc) = fetchDocumentWithBypass("$base/?s=$query")
+        return parsePosts(doc, base)
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val response = app.get(url, headers = headers)
-        val document = response.document
+        // If user tapped the [Debug Tap Me] card, display the full diagnostic details in the plot!
+        if (url.contains("?debug_info=")) {
+            val decoded = URLDecoder.decode(url.substringAfter("?debug_info="), "UTF-8")
+            return newMovieLoadResponse("Debug Diagnostic Info", url, defaultTvType, "") {
+                this.plot = decoded
+            }
+        }
+
+        val (_, document) = fetchDocumentWithBypass(url)
         val rawTitle = document.selectFirst("h1.entry-title, h1.post-title, h1, h2.entry-title")?.text()?.trim()
             ?: document.title()
         val title = cleanPostTitle(rawTitle)
@@ -231,7 +271,7 @@ abstract class KatWorldBaseProvider(
 class KatMovieHDProvider : KatWorldBaseProvider(
     siteKey = "KatmovieHD",
     name = "KatmovieHD",
-    mainUrl = "https://katmoviehd.top",
+    mainUrl = "https://katmoviehd.rog",
     defaultTvType = TvType.Movie
 ) {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -240,7 +280,7 @@ class KatMovieHDProvider : KatWorldBaseProvider(
 class MoviesBabaProvider : KatWorldBaseProvider(
     siteKey = "MoviesBaba",
     name = "MoviesBaba",
-    mainUrl = "https://moviesbaba.lol",
+    mainUrl = "https://moviesbaba.cam",
     defaultTvType = TvType.Movie
 ) {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -258,7 +298,7 @@ class PikaHDProvider : KatWorldBaseProvider(
 class KatDramaProvider : KatWorldBaseProvider(
     siteKey = "KatDrama",
     name = "KatDrama",
-    mainUrl = "https://katdrama.my",
+    mainUrl = "https://katdrama.com",
     defaultTvType = TvType.AsianDrama
 ) {
     override val supportedTypes = setOf(TvType.AsianDrama, TvType.TvSeries, TvType.Movie)
