@@ -231,7 +231,7 @@ abstract class KatWorldBaseProvider(
 class KatMovieHDProvider : KatWorldBaseProvider(
     siteKey = "KatmovieHD",
     name = "KatmovieHD",
-    mainUrl = "https://katmoviehd.rodeo",
+    mainUrl = "https://katmoviehd.top",
     defaultTvType = TvType.Movie
 ) {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -240,7 +240,7 @@ class KatMovieHDProvider : KatWorldBaseProvider(
 class MoviesBabaProvider : KatWorldBaseProvider(
     siteKey = "MoviesBaba",
     name = "MoviesBaba",
-    mainUrl = "https://moviesbaba.render",
+    mainUrl = "https://moviesbaba.lol",
     defaultTvType = TvType.Movie
 ) {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
@@ -258,7 +258,7 @@ class PikaHDProvider : KatWorldBaseProvider(
 class KatDramaProvider : KatWorldBaseProvider(
     siteKey = "KatDrama",
     name = "KatDrama",
-    mainUrl = "https://katdrama.com",
+    mainUrl = "https://katdrama.my",
     defaultTvType = TvType.AsianDrama
 ) {
     override val supportedTypes = setOf(TvType.AsianDrama)
