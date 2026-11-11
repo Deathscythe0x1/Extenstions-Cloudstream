@@ -7,61 +7,34 @@ import java.util.concurrent.ConcurrentHashMap
 object KatWorldPortal {
     private const val PORTAL_URL = "https://katworld.net"
     private val cachedLinks = ConcurrentHashMap<String, String>()
-    private val buttonUrls = ConcurrentHashMap<String, String>()
 
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer" to "$PORTAL_URL/"
+    val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9"
     )
 
+    // Verified live domains from katworld.net buttons
     private val fallbackDomains = mapOf(
-        "KatmovieHD" to "https://katmoviehd.top",
-        "MoviesBaba" to "https://moviesbaba.lol",
+        "KatmovieHD" to "https://katmoviehd.rog",
+        "MoviesBaba" to "https://moviesbaba.cam",
         "PikaHD" to "https://new.pikahd.co",
-        "KatDrama" to "https://katdrama.my",
-        "Katmovie18" to "https://katmovie18.my",
+        "KatDrama" to "https://katdrama.com",
+        "Katmovie18" to "https://katmovie18.dev",
         "Katmovie4K" to "https://katmovie4k.com"
     )
 
-    private fun resolveHref(rawHref: String): String {
-        return try {
-            URI(PORTAL_URL).resolve(rawHref.trim()).toString().removeSuffix("/")
-        } catch (_: Exception) {
-            rawHref.trim().removeSuffix("/")
-        }
-    }
-
-    private fun extractOrigin(url: String): String? {
+    private fun extractExternalOrigin(url: String): String? {
         return try {
             val uri = URI(url.trim())
             val host = uri.host ?: return null
-            if (host.contains("katworld.net", ignoreCase = true)) return null
-            "${uri.scheme ?: "https"}://$host"
+            if (host.contains("katworld.net", ignoreCase = true) ||
+                host.contains("google", ignoreCase = true) ||
+                host.contains("telegram", ignoreCase = true)
+            ) return null
+            "https://$host"
         } catch (_: Exception) {
             null
-        }
-    }
-
-    private suspend fun loadPortalButtons() {
-        if (buttonUrls.isNotEmpty()) return
-        try {
-            val doc = app.get(PORTAL_URL, headers = headers).document
-            doc.select("a[href]").forEach { a ->
-                val text = "${a.text()} ${a.attr("title")} ${a.parent()?.text() ?: ""}"
-                val rawHref = a.attr("href").trim()
-                if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.startsWith("javascript")) return@forEach
-
-                val fullUrl = resolveHref(rawHref)
-                when {
-                    text.contains("KatmovieHD", ignoreCase = true) -> buttonUrls.putIfAbsent("KatmovieHD", fullUrl)
-                    text.contains("MoviesBaba", ignoreCase = true) -> buttonUrls.putIfAbsent("MoviesBaba", fullUrl)
-                    text.contains("PikaHD", ignoreCase = true) -> buttonUrls.putIfAbsent("PikaHD", fullUrl)
-                    text.contains("KatDrama", ignoreCase = true) -> buttonUrls.putIfAbsent("KatDrama", fullUrl)
-                    text.contains("Katmovie18", ignoreCase = true) -> buttonUrls.putIfAbsent("Katmovie18", fullUrl)
-                    text.contains("Katmovie4K", ignoreCase = true) -> buttonUrls.putIfAbsent("Katmovie4K", fullUrl)
-                }
-            }
-        } catch (_: Exception) {
         }
     }
 
@@ -69,41 +42,45 @@ object KatWorldPortal {
         if (siteKey == "PikaHD") return "https://new.pikahd.co"
         cachedLinks[siteKey]?.let { return it }
 
-        loadPortalButtons()
-        val targetUrl = buttonUrls[siteKey]
+        try {
+            val doc = app.get(PORTAL_URL, headers = headers).document
 
-        if (targetUrl != null) {
-            // 1. If the button already points directly to an external domain, use it immediately
-            extractOrigin(targetUrl)?.let { origin ->
-                cachedLinks[siteKey] = origin
-                return origin
-            }
+            for (a in doc.select("a[href]")) {
+                val text = "${a.text()} ${a.attr("title")} ${a.parent()?.text() ?: ""}"
+                if (!text.contains(siteKey, ignoreCase = true)) continue
 
-            // 2. If the button points to a katworld.net redirect link, follow it to find the destination domain
-            try {
-                val response = app.get(targetUrl, headers = headers, allowRedirects = true)
+                val rawHref = a.attr("href").trim()
+                if (rawHref.isEmpty() || rawHref.startsWith("#")) continue
 
-                extractOrigin(response.url)?.let { origin ->
+                val buttonUrl = try {
+                    URI(PORTAL_URL).resolve(rawHref).toString()
+                } catch (_: Exception) {
+                    rawHref
+                }
+
+                // Case A: Button points directly to the domain
+                extractExternalOrigin(buttonUrl)?.let { origin ->
                     cachedLinks[siteKey] = origin
                     return origin
                 }
 
-                response.headers["Location"]?.let { loc ->
-                    extractOrigin(loc)?.let { origin ->
-                        cachedLinks[siteKey] = origin
-                        return origin
-                    }
+                // Case B: Button is a redirect link on katworld.net -> follow it
+                val resp = app.get(buttonUrl, headers = headers, allowRedirects = true)
+                extractExternalOrigin(resp.url)?.let { origin ->
+                    cachedLinks[siteKey] = origin
+                    return origin
                 }
 
-                val urlRegex = Regex("""https?://(?!katworld\.net)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""")
-                urlRegex.find(response.text)?.value?.let { matchedUrl ->
-                    extractOrigin(matchedUrl)?.let { origin ->
+                // Case C: HTML/JS redirect inside the button response
+                val regex = Regex("""https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""")
+                for (match in regex.findAll(resp.text)) {
+                    extractExternalOrigin(match.value)?.let { origin ->
                         cachedLinks[siteKey] = origin
                         return origin
                     }
                 }
-            } catch (_: Exception) {
             }
+        } catch (_: Exception) {
         }
 
         return fallbackDomains[siteKey] ?: "https://new.pikahd.co"
