@@ -252,7 +252,7 @@ class PikaHDProvider : KatWorldBaseProvider(
     mainUrl = "https://new.pikahd.co",
     defaultTvType = TvType.Anime
 ) {
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.TvSeries, TvType.Movie)
 }
 
 class KatDramaProvider : KatWorldBaseProvider(
@@ -261,7 +261,7 @@ class KatDramaProvider : KatWorldBaseProvider(
     mainUrl = "https://katdrama.my",
     defaultTvType = TvType.AsianDrama
 ) {
-    override val supportedTypes = setOf(TvType.AsianDrama)
+    override val supportedTypes = setOf(TvType.AsianDrama, TvType.TvSeries, TvType.Movie)
 }
 
 class KatMovie4KProvider : KatWorldBaseProvider(
